@@ -100,5 +100,6 @@ class StreamUtility {
 
 module.exports = {
     encodeHeader,
-    decodeHeader
+    decodeHeader,
+    StreamUtility
 }

@@ -1,0 +1,22 @@
+{
+  "name": "auirum-node",
+  "version": "1.0.0",
+  "description": "Aurium is a coin which is designed to handle a high TPS and without requirement of fees.",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/AuriumCoin/Aurium.git"
+  },
+  "keywords": [
+    "cryptocurrency"
+  ],
+  "author": "AuriumDev",
+  "license": "GPL-3.0-or-later",
+  "bugs": {
+    "url": "https://github.com/AuriumCoin/Aurium/issues"
+  },
+  "homepage": "https://github.com/AuriumCoin/Aurium#readme",
+  "dependencies": {
+    "yargs": "^17.5.1"
+  }
+}
