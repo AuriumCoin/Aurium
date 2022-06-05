@@ -18,7 +18,87 @@ function decodeHeader(header) {
     }
 }
 
+function getBodySize(headerinfo) {
+    switch (headerinfo.opcode) { }
+    
+    return null;
+}
+
+/*
+Callback OpCodes:
+ 0 - Message
+ 1 - Streaming / Parsing Error
+*/
+
+class StreamUtility {
+    constructor() {
+        this.callback = null;
+        this.callbackQueue = [];
+
+        this.state = {
+            headerinfo: null,
+            header: Buffer.alloc(2),
+            headerSize: 0,
+            bodySize: 0,
+            body: null,
+            expectedBodySize: null
+        }
+    }
+
+    resetState() {
+        this.state.headerSize = 0;
+        this.state.bodySize = 0;
+    }
+
+    destroy() {
+        this.state = null;
+        this.triggerCallback(1, null);
+    }
+
+    streamHeader(packet) {
+        if (this.state == null) return;
+        if (this.state.headerSize == 2) {
+
+        } else {
+            const headerPtr = (2 - this.state.headerSize);
+            const header = packet.subarray(0, headerPtr);
+            this.state.header.set(header, this.state.headerSize);
+            this.state.headerSize += header.length;
+
+            if (this.state.headerSize == 2) {
+                this.headerinfo = decodeHeader(this.state.header);
+                const bodySize = getBodySize(this.headerinfo);
+
+                if (bodySize == null) {
+                    this.destroy();
+                    return;
+                }
+            }
+        }
+    }
+
+    triggerCallback(opcode, data) {
+        if (this.callback) {
+            this.callback(opcode, data);
+        } else {
+            this.callbackQueue.push([opcode, data]);
+        }
+    }
+
+    hookCallback(func) {
+        this.callback = func;
+        for (;;) {
+            const next = this.callbackQueue.shift();
+            if (next) {
+                func(next[0], next[1]);
+            } else {
+                break;
+            }
+        }
+    }
+}
+
 module.exports = {
     encodeHeader,
-    decodeHeader 
+    decodeHeader
 }
