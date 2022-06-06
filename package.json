@@ -17,6 +17,8 @@
   },
   "homepage": "https://github.com/AuriumCoin/Aurium#readme",
   "dependencies": {
+    "blake2": "^4.1.1",
+    "ip6addr": "^0.2.5",
     "yargs": "^17.5.1"
   }
 }

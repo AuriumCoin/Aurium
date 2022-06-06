@@ -1,3 +1,9 @@
+/*
+Message Opcodes:
+ 0 - Node Identifier Exchange
+ 1 - Ping / Pong (KeepAlive) [every minute in loop, 2 minutes declares peer offline]
+*/
+
 function encodeHeader(opcode, extensions) {
     if (opcode > 0x1F) throw Error("Opcode is above 5 bits");
     if (extensions > 0x7FF) throw Error("Extensions is above 11 bits");
@@ -19,7 +25,20 @@ function decodeHeader(header) {
 }
 
 function getBodySize(headerinfo) {
-    switch (headerinfo.opcode) { }
+    switch (headerinfo.opcode) {
+        case 0: {
+            let size = 0;
+            if (headerinfo.extensions & 1) {
+                size += 64;
+            }
+            if (headerinfo.extensions & 2) {
+                const repCount = (headerinfo.extensions >> 3) & 0x1f;
+                size += (32 + (repCount * 96));
+            }
+
+            return size;
+        }
+    }
     
     return null;
 }
@@ -101,5 +120,6 @@ class StreamUtility {
 module.exports = {
     encodeHeader,
     decodeHeader,
-    StreamUtility
+    StreamUtility,
+    getBodySize
 }
