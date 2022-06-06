@@ -124,17 +124,26 @@ function XORBuffer32(buf1, buf2) {
     return buf;
 }
 
-function signMessage(message, height, sharedSecret, cookie) {
+function _signMessage(message, height, sharedSecret, cookie) {
     const h = blake2.createKeyedHash('blake2b', Buffer.concat([
         sharedSecret,
         cookie
-    ]));
+    ]), {digestLength: 32});
     const buf = Buffer.alloc(message.length + 8);
     buf.writeBigUInt64BE(height);
     buf.set(message, 8);
     h.update(buf);
  
     return h.digest();
+}
+
+function signMessage(message, height, sharedSecret, cookie) {
+    const signature = _signMessage(message, height, sharedSecret, cookie);
+ 
+    return Buffer.concat([
+        message,
+        signature
+    ]);
 }
 
 function establishConnection(address, port, raw) {
@@ -218,14 +227,16 @@ server.on('message', (msg, rinfo) => {
                     NodeSecretKey,
                     NodeID
                 )
-                
+
                 if (isNewConnection) {
                     const thisCookie = crypto.randomBytes(32);
+                    const newCookie = XORBuffer32(thisCookie, body);
+
                     peerList.set(connectionID, {
                         isConnected: false,
-                        NodeID: body.subarray(32, 64),
+                        NodeID,
                         lastPing: 0,
-                        cookie: XORBuffer32(thisCookie, body),
+                        cookie: newCookie,
                         hasCookie: true,
                         sharedSecret: sharedSecret,
                         msgHeight: 1n,
@@ -233,29 +244,54 @@ server.on('message', (msg, rinfo) => {
                     });
 
                     console.log("Shared Secret", sharedSecret);
-                    console.log("Cookie", XORBuffer32(thisCookie, body));
+                    console.log("Cookie", newCookie);
 
-                    server.send(Buffer.concat([
-                        encodeHeader(0, 1),
-                        thisCookie,
-                        NodePublicKey
-                    ]), rinfo.port, rinfo.address);
+                    server.send(signMessage(Buffer.concat([
+                            encodeHeader(0, 1 | 2),
+                            thisCookie,
+                            NodePublicKey
+                        ]),
+                        0n,
+                        sharedSecret,
+                        newCookie
+                    ), rinfo.port, rinfo.address);
                 } else if (!peerEntry.hasCookie) {
+                    const newCookie = XORBuffer32(peerEntry.cookie, body);
                     peerEntry.hasCookie = true;
-                    const cookie = XORBuffer32(peerEntry.cookie, body);
-                    peerEntry.cookie = cookie;
+                    peerEntry.cookie = newCookie;
+                    peerEntry.NodeID = NodeID;
 
                     console.log("Shared Secret", sharedSecret);
-                    console.log("Cookie", cookie);
+                    console.log("Cookie", newCookie);
 
                     peerEntry.sharedSecret = sharedSecret;
 
+                    server.send(signMessage(
+                        encodeHeader(0, 2),
+                        0n,
+                        sharedSecret,
+                        newCookie
+                    ), rinfo.port, rinfo.address);
+                }
+            }
+
+            if (hasResponse && !isNewConnection && !peerEntry.isConnected && peerEntry.sharedSecret) {
+                const signature = _signMessage(msg.subarray(0, -32), 0n, peerEntry.sharedSecret, peerEntry.cookie);
+
+                const isValid = (msg.subarray(-32).equals(signature));
+
+                if (isValid) {
+                    peerEntry.isConnected = true;
+                    console.log("Established Secure Connection")
                 }
             }
 
             break;
         }
         case 1: {
+            if (peerEntry) {
+                peerEntry.lastPing = Date.now()
+            }
             break;
         }
     }
