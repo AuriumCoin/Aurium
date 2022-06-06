@@ -203,6 +203,24 @@ function getRawConnecitonInfo(rinfo) {
     return buf;
 }
 
+function encodeIPv6(raw) {
+    const hex = raw.toString('hex')
+    const hexParts = hex.match(/.{1,4}/g)
+    const subnet = hexParts[5]
+    let formattedAddress
+    formattedAddress = hexParts.join(':')
+    return formattedAddress
+  }
+
+function decodeConnectionInfo(connection) {
+    const address = encodeIPv6(connection.subarray(0, 16))
+    const port = connection.readUInt16LE(16)
+    return {
+        address,
+        port
+    }
+}
+
 server.on('message', (msg, rinfo) => {
     if (msg.length < 2) return;
     const header = decodeHeader(msg);
@@ -243,9 +261,6 @@ server.on('message', (msg, rinfo) => {
                         thisMsgHeight: 1n
                     });
 
-                    console.log("Shared Secret", sharedSecret);
-                    console.log("Cookie", newCookie);
-
                     server.send(signMessage(Buffer.concat([
                             encodeHeader(0, 1 | 2),
                             thisCookie,
@@ -260,9 +275,6 @@ server.on('message', (msg, rinfo) => {
                     peerEntry.hasCookie = true;
                     peerEntry.cookie = newCookie;
                     peerEntry.NodeID = NodeID;
-
-                    console.log("Shared Secret", sharedSecret);
-                    console.log("Cookie", newCookie);
 
                     peerEntry.sharedSecret = sharedSecret;
 
@@ -282,6 +294,7 @@ server.on('message', (msg, rinfo) => {
 
                 if (isValid) {
                     peerEntry.isConnected = true;
+                    peerEntry.lastPing = Date.now()
                     console.log("Established Secure Connection")
                 }
             }
@@ -297,6 +310,17 @@ server.on('message', (msg, rinfo) => {
     }
     console.log("server got:", header, ` from ${rinfo.address}:${rinfo.port}`);
 });
+
+const PEER_EXPIRY = 2 * 60 * 1000;
+
+setInterval(() => {
+    for (const [key, value] of peerList.entries()) {
+        if (value.isConnected === true && ((Date.now() - value.lastPing) < PEER_EXPIRY)) {
+            const rinfo = decodeConnectionInfo(Buffer.from(key, 'binary'));
+            server.send(encodeHeader(1, 0), rinfo.port, rinfo.address);
+        }
+    }
+}, 60 * 1000)
 
 server.on('listening', () => {
     const address = server.address();

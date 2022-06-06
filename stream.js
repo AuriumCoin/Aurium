@@ -38,6 +38,9 @@ function getBodySize(headerinfo) {
 
             return size;
         }
+        case 1: {
+            return 0;
+        }
     }
     
     return null;
