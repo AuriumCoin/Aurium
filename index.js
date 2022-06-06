@@ -23,6 +23,8 @@ const {
 const yargs = require('yargs/yargs')
 const { hideBin } = require('yargs/helpers')
 
+const PrivateKeyHexRegex = /^[0-9A-Fa-f]+$/;
+
 const argv = yargs(hideBin(process.argv)).options({
     port: { 
         type: 'number',
@@ -43,6 +45,12 @@ const argv = yargs(hideBin(process.argv)).options({
         alias: 'd',
         default: '127.0.0.1:8081',
         describe: '[IP]:[PORT] Set the peer which Node connects on first start up.',
+        array: true
+    },
+    'privateKey': { 
+        type: 'string',
+        alias: 'k',
+        describe: 'Representative Private Key for Voting. You can only specify up to 31 representatives.',
         array: true
     }
     
@@ -69,11 +77,11 @@ const argv = yargs(hideBin(process.argv)).options({
         for (const pair of argv['default-peer']) {
             const pairSegments = pair.split(":");
             if (pairSegments.length < 2) {
-                throw new Error('Argument check failed: Invalid Peer Format. 1');
+                throw new Error('Argument check failed: Invalid Peer Format.');
             }
             if (pairSegments.length > 2) {
                 if (!isIPv6(pairSegments.slice(0, -1).join(":"))) {
-                    throw new Error('Argument check failed: Invalid Peer Format. 2');
+                    throw new Error('Argument check failed: Invalid Peer Format.');
                 }
             }
     
@@ -83,10 +91,14 @@ const argv = yargs(hideBin(process.argv)).options({
         }
     }
 
+    for (const key of argv['privateKey']) {
+        if (key.length !== 64 || !PrivateKeyHexRegex.test(key)) {
+            throw new Error('Argument check failed: Invalid Private Key: ' + key);
+        }
+    }
+
     return true;
 }).argv
-
-//console.log(argv)
 
 server.bind(argv.port, argv.listenAddress);
 
