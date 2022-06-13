@@ -2,6 +2,7 @@
 Message Opcodes:
  0 - Node Identifier Exchange
  1 - Ping / Pong (KeepAlive) [every minute in loop, 2 minutes declares peer offline]
+ 2 = Peer List
 */
 
 function encodeHeader(opcode, extensions) {
@@ -40,6 +41,10 @@ function getBodySize(headerinfo) {
         }
         case 1: {
             return 0;
+        }
+        case 2: {
+            const peerCount = headerinfo.extensions & 15;
+            return (18*peerCount) + 32;
         }
     }
     

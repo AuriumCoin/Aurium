@@ -7,6 +7,8 @@ const ed25519 = require('./ed25519.js');
 const crypto = require('crypto');
 const blake2 = require('blake2');
 
+const startHTTPAPI = require('./http-api.js');
+
 const NodeSecretKey = crypto.randomBytes(64);
 const NodePublicKey = ed25519.getPublicKey(NodeSecretKey);
 
@@ -40,6 +42,11 @@ const argv = yargs(hideBin(process.argv)).options({
         describe: '[string] Set a listening address. Has to be IPv6',
         array: false
     },
+    httpPort: { 
+        type: 'number',
+        describe: '[number] Set a port number. Nothing means no HTTP API',
+        array: false
+    },
     'default-peer': { 
         type: 'string',
         alias: 'd',
@@ -50,6 +57,7 @@ const argv = yargs(hideBin(process.argv)).options({
     'privateKey': { 
         type: 'string',
         alias: 'k',
+        default: [],
         describe: 'Representative Private Key for Voting. You can only specify up to 31 representatives.',
         array: true
     }
@@ -91,7 +99,11 @@ const argv = yargs(hideBin(process.argv)).options({
         }
     }
 
-    for (const key of argv['privateKey']) {
+    if (argv.privateKey.length > 31) {
+        throw new Error('Argument check failed: More than 31 Representatives Specified.');
+    }
+
+    for (const key of argv.privateKey) {
         if (key.length !== 64 || !PrivateKeyHexRegex.test(key)) {
             throw new Error('Argument check failed: Invalid Private Key: ' + key);
         }
@@ -113,6 +125,11 @@ const defaultPeerList = [];
 
 
 const peerList = new Map();
+
+const nodeState = {
+    peerList,
+
+}
 
 /* 
 {
@@ -233,6 +250,37 @@ function decodeConnectionInfo(connection) {
     }
 }
 
+function getPeers() {
+    let array = [];
+    for (const [key, value] of peerList.entries()) {
+        if (value.isConnected === true && ((Date.now() - value.lastPing) < PEER_EXPIRY)) {
+            array.push(Buffer.from(key, "binary"));
+        }
+    }
+    array = array.sort(() => 0.5 - Math.random()).slice(0, 15);
+
+    return array;
+}
+
+function sendSignedMessage(message, address, port, sharedSecret, cookie) {
+    server.send(signMessage(
+        message,
+        0n,
+        sharedSecret,
+        cookie
+    ), port, address);
+}
+
+function sendPeers(peers, address, port, sharedSecret, cookie) {
+    sendSignedMessage(
+        Buffer.concat([
+            encodeHeader(2, peers.length),
+            ...peers
+        ]),
+        address, port, sharedSecret, cookie
+    )
+}
+
 server.on('message', (msg, rinfo) => {
     if (msg.length < 2) return;
     const header = decodeHeader(msg);
@@ -253,6 +301,7 @@ server.on('message', (msg, rinfo) => {
 
             if (hasCookie) {
                 const NodeID = body.subarray(32, 64);
+                if (NodeID.equals(NodePublicKey)) return;
                 const sharedSecret = ed25519.getSharedSecret(
                     NodeSecretKey,
                     NodeID
@@ -282,6 +331,8 @@ server.on('message', (msg, rinfo) => {
                         sharedSecret,
                         newCookie
                     ), rinfo.port, rinfo.address);
+
+                    sendPeers(getPeers(), rinfo.address, rinfo.port, sharedSecret, newCookie);
                 } else if (!peerEntry.hasCookie) {
                     const newCookie = XORBuffer32(peerEntry.cookie, body);
                     peerEntry.hasCookie = true;
@@ -296,6 +347,8 @@ server.on('message', (msg, rinfo) => {
                         sharedSecret,
                         newCookie
                     ), rinfo.port, rinfo.address);
+
+                    sendPeers(getPeers(), rinfo.address, rinfo.port, sharedSecret, newCookie);
                 }
             }
 
@@ -319,8 +372,38 @@ server.on('message', (msg, rinfo) => {
             }
             break;
         }
+        case 2: {
+            if (peerEntry) {
+                const signature = _signMessage(msg.subarray(0, -32), 0n, peerEntry.sharedSecret, peerEntry.cookie);
+
+                const isValid = (msg.subarray(-32).equals(signature));
+
+                if (isValid) {
+                    const peerCount = header.extensions & 15;
+                    
+                    for (var i = 0; i < peerCount; i++) {
+                        const peerPtr = i * 18;
+                        const peer = body.subarray(peerPtr, peerPtr + 18);
+                        const peerBinary = peer.toString("binary");
+
+                        if (peerList.has(peerBinary)) continue;
+
+                        const connectionInfo = decodeConnectionInfo(peer);
+
+                        console.log("New Peer: [" + connectionInfo.address + "]:" + connectionInfo.port);
+                        
+                        establishConnection(
+                            connectionInfo.address, 
+                            connectionInfo.port, 
+                            peerBinary
+                        );
+                    }
+                }
+            }
+
+            break;
+        }
     }
-    console.log("server got:", header, ` from ${rinfo.address}:${rinfo.port}`);
 });
 
 const PEER_EXPIRY = 2 * 60 * 1000;
@@ -334,7 +417,33 @@ setInterval(() => {
     }
 }, 60 * 1000)
 
+setInterval(() => {
+    const peers = getPeers();
+    const peerMessage = Buffer.concat([
+        encodeHeader(2, peers.length),
+        ...peers
+    ]);
+
+    for (const [key, value] of peerList.entries()) {
+        if (value.isConnected === true && ((Date.now() - value.lastPing) < PEER_EXPIRY)) {
+            const rinfo = decodeConnectionInfo(Buffer.from(key, 'binary'));
+            sendSignedMessage(
+                peerMessage,
+                rinfo.address,
+                rinfo.port,
+                value.sharedSecret,
+                value.cookie
+            );
+        }
+    }
+
+}, 3 * 60 * 1000)
+
 server.on('listening', () => {
     const address = server.address();
     console.log(`Socket listening ${address.address}:${address.port}`);
+
+    if (argv.httpPort) {
+        startHTTPAPI(nodeState, argv.httpPort)
+    }
 });

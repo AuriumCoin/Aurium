@@ -1,47 +1,15 @@
-const blake2 = require('blake2');
-const { base58_to_binary, binary_to_base58 } = require('base58-js')
+const ed25519 = require('./ed25519.js');
 
-function hashBlock(block, isUniversal) {
-    const h = blake2.createHash('blake2b', { digestLength: 32 });
-    h.update(block);
-    const hash = h.digest();
-    /*if (isUniversal) {
-        hash[0] |= 0x80;
-    } else {
-        hash[0] &= 0x7f;
-    }*/
-    return hash;
-}
+const {
+    GENESIS_PUBLIC,
+    GENESIS_ADDRESS
+} = require('./constants.js');
 
-function encodeAddress(publicKey) {
-    let checksum = blake2.createHash('blake2b', { digestLength: 8 });
-    checksum.update(publicKey);
-    checksum = checksum.digest();
-
-    return "aur_" + binary_to_base58(Buffer.concat([
-        publicKey,
-        checksum
-    ]));
-}
-
-console.log(encodeAddress(Buffer.alloc(32, 0)))
-
-function decodeAddress(address) {
-    if (!address.startsWith("aur_")) throw Error("Address isn't an Aurium Address");
-    const decoded = Buffer.from(
-        base58_to_binary(address.slice(4))
-    );
-
-    let checksum = blake2.createHash('blake2b', { digestLength: 8 });
-    checksum.update(decoded.subarray(0, 32));
-    checksum = checksum.digest();
-
-    if (checksum.equals(decoded.subarray(32))) {
-        return decoded.subarray(0, 32);
-    } else {
-        throw Error("Address is corrupted");
-    }
-}
+const {
+    decodeAddress,
+    encodeAddress,
+    hashBlock
+} = require('./utils.js')
 
 const lmdb = require('node-lmdb');
 const fs = require('fs');
@@ -66,20 +34,14 @@ const accountDBI = env.openDbi({
     keyIsBuffer: true
 });
 
-(() => {
-    const txn = env.beginTxn({ readOnly: true });
-
-    var cursor = new lmdb.Cursor(txn, accountDBI);
-
-    for (var found = cursor.goToFirst(); found !== null; found = cursor.goToNext()) {
-        console.log(cursor.getCurrentBinary());
-    }
-})();
-
 const BLOCK_TYPES = {
     SEND: 0,
     SPLIT: 1,
     CLAIM: 2
+}
+
+const BLOCK_SIZES = {
+    [BLOCK_TYPES.SEND]: 121
 }
 
 function encodeBlock(blockInfo) {
@@ -97,25 +59,22 @@ function encodeBlock(blockInfo) {
             block.writeBigUInt64BE(amountBigInt & 0xffffffffffffffffn, 73);
 
             block.set(Buffer.from(blockInfo.blockLink, "hex"), 81);
-            block.set(Buffer.from(blockInfo.signature, "hex"), 113);
-
-            block.writeBigUInt64BE(BigInt(blockInfo.timestamp), 177);
+            block.writeBigUInt64BE(BigInt(blockInfo.timestamp), 113);
+            block.set(Buffer.from(blockInfo.signature, "hex"), 121);
             return block;
         }
     }
-}
+}   
 
 const genesisBlock = encodeBlock({
     type: "SEND",
     source: "aur_11111111111111111111111111111111ZxeF6dTF8vL",
-    recipient: "aur_8uxVDkPRuevhF9cFtiM1igEqMHJJvTwAewrCSZDzEvpdqmfG4nXYBSu",
+    recipient: GENESIS_ADDRESS,
     amount: "15000000000000",
     blockLink: "0000000000000000000000000000000000000000000000000000000000000000",
-    signature: "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
-    timestamp: "0"
+    timestamp: "1654549740842",
+    signature: "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 })
-
-console.log(genesisBlock)
 
 function readBigUInt128BE(buffer, offset) {
     let result = buffer.readBigUInt64BE(offset) << 64n;
@@ -129,8 +88,27 @@ function writeBigUInt128BE(buffer, value, offset) {
     buffer.writeBigUInt64BE(value & 0xffffffffffffffffn, offset + 8);
 }
 
+function validateBlock(block, hash, blockType) {
+    switch (blockType) {
+        case BLOCK_TYPES.SEND: {
+            return ed25519.verify(block.subarray(-64), hash, block.subarray(1, 33));
+        }
+    }
+    return false;
+}
+
 function _insertBlock(txn, block, bypassCheck) {
-    const hash = hashBlock(block);
+    const BLOCK_TYPE = block[0];
+    const BLOCK_SIZE = BLOCK_SIZES[BLOCK_TYPE];
+
+    const hash = hashBlock(block.subarray(0, BLOCK_SIZE));
+
+    const isValid = validateBlock(block, hash, BLOCK_TYPE);
+
+    if (!bypassCheck && !isValid) {
+        txn.abort();
+        return "MALFORMED SIGNATURE";
+    }
 
     if (txn.getBinary(blockDBI, hash)) {
         txn.abort();
@@ -139,7 +117,7 @@ function _insertBlock(txn, block, bypassCheck) {
 
     let insert = true;
 
-    switch(block[0]) {
+    switch(BLOCK_TYPE) {
         case BLOCK_TYPES.SEND: {
             const blockAmount = readBigUInt128BE(block, 65);
             if (!bypassCheck) {
@@ -198,7 +176,38 @@ function _insertBlock(txn, block, bypassCheck) {
 
 function insertBlock(block, bypassCheck) {
     const txn = env.beginTxn();
-    return _insertBlock(txn, block, bypassCheck);
+    console.log(_insertBlock(txn, block, bypassCheck));
 }
 
 insertBlock(genesisBlock, true);
+
+function listAccounts() {
+    const txn = env.beginTxn({ readOnly: true });
+
+    var cursor = new lmdb.Cursor(txn, accountDBI);
+
+    let list = [];
+
+    for (var found = cursor.goToFirst(); found !== null; found = cursor.goToNext()) {
+        const value = cursor.getCurrentBinary();
+        const balance = readBigUInt128BE(value, 0).toString();
+        const account = encodeAddress(found);
+        const head = value.subarray(16, 48).toString("hex").toUpperCase();
+
+        list.push({
+            balance,
+            account,
+            head
+        })
+    }
+
+    txn.abort();
+
+    return list;
+}
+
+console.log(listAccounts())
+
+module.exports = {
+
+}
