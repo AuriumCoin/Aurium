@@ -8,7 +8,9 @@ const {
 const {
     decodeAddress,
     encodeAddress,
-    hashBlock
+    hashBlock,
+    readBigUInt128BE,
+    writeBigUInt128BE
 } = require('./utils.js')
 
 const lmdb = require('node-lmdb');
@@ -24,6 +26,12 @@ env.open({
 
 const blockDBI = env.openDbi({
     name: "blocks",
+    create: true,
+    keyIsBuffer: true
+});
+
+const pendingDBI = env.openDbi({
+    name: "pending",
     create: true,
     keyIsBuffer: true
 });
@@ -44,7 +52,7 @@ const BLOCK_SIZES = {
     [BLOCK_TYPES.SEND]: 121
 }
 
-function encodeBlock(blockInfo) {
+function encodeRPCBlock(blockInfo) {
     if (BLOCK_TYPES[blockInfo.type] === undefined) throw Error("Block Type doesn't exist.");
     switch (blockInfo.type) {
         case "SEND": {
@@ -53,10 +61,7 @@ function encodeBlock(blockInfo) {
             block.set(decodeAddress(blockInfo.source), 1);
             block.set(decodeAddress(blockInfo.recipient), 33);
 
-            const amountBigInt = BigInt(blockInfo.amount);
-
-            block.writeBigUInt64BE(amountBigInt >> 64n, 65);
-            block.writeBigUInt64BE(amountBigInt & 0xffffffffffffffffn, 73);
+            writeBigUInt128BE(block, BigInt(blockInfo.amount), 65);
 
             block.set(Buffer.from(blockInfo.blockLink, "hex"), 81);
             block.writeBigUInt64BE(BigInt(blockInfo.timestamp), 113);
@@ -64,9 +69,32 @@ function encodeBlock(blockInfo) {
             return block;
         }
     }
-}   
+}
 
-const genesisBlock = encodeBlock({
+function decodeBlock(block) {
+    switch (block[0]) {
+        case BLOCK_TYPES.SEND: {
+            const SOURCE = block.subarray(1, 33);
+            const RECIPIENT = block.subarray(33, 65);
+            const AMOUNT = readBigUInt128BE(block, 65);
+            const BLOCK_LINK = block.subarray(81, 113);
+            const TIMESTAMP = block.readBigUInt64BE(113);
+            const SIGNATURE = block.subarray(121, 185);
+            return {
+                SOURCE,
+                RECIPIENT,
+                AMOUNT,
+                BLOCK_LINK,
+                TIMESTAMP,
+                SIGNATURE
+            }
+        }
+    }
+
+    return null;
+}
+
+const genesisBlock = encodeRPCBlock({
     type: "SEND",
     source: "aur_11111111111111111111111111111111ZxeF6dTF8vL",
     recipient: GENESIS_ADDRESS,
@@ -75,18 +103,6 @@ const genesisBlock = encodeBlock({
     timestamp: "1654549740842",
     signature: "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 })
-
-function readBigUInt128BE(buffer, offset) {
-    let result = buffer.readBigUInt64BE(offset) << 64n;
-    result |= buffer.readBigUInt64BE(offset + 8);
-
-    return result;
-}
-
-function writeBigUInt128BE(buffer, value, offset) {
-    buffer.writeBigUInt64BE(value >> 64n, offset);
-    buffer.writeBigUInt64BE(value & 0xffffffffffffffffn, offset + 8);
-}
 
 function validateBlock(block, hash, blockType) {
     switch (blockType) {
@@ -98,6 +114,8 @@ function validateBlock(block, hash, blockType) {
 }
 
 function _insertBlock(txn, block, bypassCheck) {
+    const BLOCK_INFO = decodeBlock(block);
+    if (BLOCK_INFO == null) return 1;
     const BLOCK_TYPE = block[0];
     const BLOCK_SIZE = BLOCK_SIZES[BLOCK_TYPE];
 
@@ -105,81 +123,79 @@ function _insertBlock(txn, block, bypassCheck) {
 
     const isValid = validateBlock(block, hash, BLOCK_TYPE);
 
-    if (!bypassCheck && !isValid) {
-        txn.abort();
-        return "MALFORMED SIGNATURE";
-    }
+    if (!bypassCheck && !isValid) return 2;
 
-    if (txn.getBinary(blockDBI, hash)) {
-        txn.abort();
-        return "BLOCK ALREADY EXISTS";
-    }
-
-    let insert = true;
+    if (txn.getBinary(blockDBI, hash)) return 3;
 
     switch(BLOCK_TYPE) {
         case BLOCK_TYPES.SEND: {
-            const blockAmount = readBigUInt128BE(block, 65);
             if (!bypassCheck) {
-                const sourceAccount = block.subarray(1, 33);
-                const sourceEntry = txn.getBinary(accountDBI, sourceAccount);
-                if (sourceEntry == null) {
-                    insert = false;
-                    txn.abort();
-                    return "SOURCE DOESN'T EXIST";
-                }
+                const sourceEntry = txn.getBinary(accountDBI, BLOCK_INFO.SOURCE);
+                if (sourceEntry == null) return 6;
 
-                if (!(sourceEntry.subarray(16, 48).equals(block.subarray(81, 113)))) {
-                    return "INVALID FRONTIER";
-                }
+                if (!(sourceEntry.subarray(16, 48).equals(BLOCK_INFO.BLOCK_LINK))) return 5;
 
                 const sourceBalance = readBigUInt128BE(sourceEntry, 0);
 
-                if (sourceBalance < blockAmount) {
-                    insert = false;
-                    txn.abort();
-                    return "SOURCE DOESN'T HAVE SUFFICENT BALACNE";
-                }
+                if (sourceBalance < BLOCK_INFO.AMOUNT) return 4;
 
-                writeBigUInt128BE(sourceEntry, sourceBalance - blockAmount, 0);
+                writeBigUInt128BE(sourceEntry, sourceBalance - BLOCK_INFO.AMOUNT, 0);
                 sourceEntry.set(hash, 16);
 
-                txn.putBinary(accountDBI, sourceAccount, sourceEntry);
+                txn.putBinary(accountDBI, BLOCK_INFO.SOURCE, sourceEntry);
             }
 
-            const destAccount = block.subarray(33, 65);
-            const destEntry = txn.getBinary(accountDBI, destAccount);
+            txn.putBinary(pendingDBI, Buffer.concat([
+                BLOCK_INFO.RECIPIENT,
+                hash
+            ]), Buffer.from([]));
+
+            /*const destEntry = txn.getBinary(accountDBI, BLOCK_INFO.RECIPIENT);
             if (destEntry) {
                 const destBalance = readBigUInt128BE(destEntry, 0);
-                writeBigUInt128BE(destEntry, destBalance + blockAmount, 0);
-                txn.putBinary(accountDBI, destAccount, destEntry);
+                writeBigUInt128BE(destEntry, destBalance + BLOCK_INFO.AMOUNT, 0);
+                txn.putBinary(accountDBI, BLOCK_INFO.RECIPIENT, destEntry);
             } else {
                 const destinationBuffer = Buffer.alloc(48, 0);
-                writeBigUInt128BE(destinationBuffer,  blockAmount, 0);
+                writeBigUInt128BE(destinationBuffer,  BLOCK_INFO.AMOUNT, 0);
 
-                txn.putBinary(accountDBI, destAccount, destinationBuffer);
-            }
+                txn.putBinary(accountDBI, BLOCK_INFO.RECIPIENT, destinationBuffer);
+            }*/
             break;
         }
         default: {
-            insert = false;
-            txn.abort();
-            break;
+            return 1;
         }
     }
 
-    if (insert) {
-        txn.putBinary(blockDBI, hash, block);
-        txn.commit();
-    }
+    txn.putBinary(blockDBI, hash, block);
+    return 0;
+}
+
+const INSERT_RESULT_CODES = {
+    0: "SUCCESS",
+    1: "INVALID BLOCK",
+    2: "MALFORMED SIGNATURE",
+    3: "BLOCK ALREADY EXISTS",
+    4: "SOURCE DOESN'T HAVE SUFFICENT BALANCE",
+    5: "INVALID FRONTIER",
+    6: "SOURCE DOESN'T EXIST"
 }
 
 function insertBlock(block, bypassCheck) {
     const txn = env.beginTxn();
-    console.log(_insertBlock(txn, block, bypassCheck));
+    const result = _insertBlock(txn, block, bypassCheck);
+
+    if (result == 0) {
+        txn.commit();
+    } else {
+        txn.abort();
+    }
+
+    return result;
 }
 
-insertBlock(genesisBlock, true);
+console.log(INSERT_RESULT_CODES[insertBlock(genesisBlock, true)]);
 
 function listAccounts() {
     const txn = env.beginTxn({ readOnly: true });
@@ -206,7 +222,33 @@ function listAccounts() {
     return list;
 }
 
-console.log(listAccounts())
+function listPending() {
+    const txn = env.beginTxn({ readOnly: true });
+
+    var cursor = new lmdb.Cursor(txn, pendingDBI);
+
+    let list = [];
+
+    for (var found = cursor.goToFirst(); found !== null; found = cursor.goToNext()) {
+        const recipient = encodeAddress(found.subarray(0, 32));
+        const blockHash = found.subarray(32, 64);
+        const block = txn.getBinary(blockDBI, blockHash);
+        if (!block) continue;
+        const amount = readBigUInt128BE(block, 65).toString();
+
+        list.push({
+            recipient,
+            hash: blockHash.toString("hex").toUpperCase(),
+            amount
+        })
+    }
+
+    txn.abort();
+
+    return list;
+}
+
+console.log(listPending())
 
 module.exports = {
 

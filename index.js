@@ -35,7 +35,7 @@ const argv = yargs(hideBin(process.argv)).options({
         describe: '[integer] Set a port number. 0 means no port binding',
         array: false
     },
-    listenAddress: { 
+    listenAddress: {
         type: 'string',
         alias: 'a',
         default: '::',
@@ -61,7 +61,7 @@ const argv = yargs(hideBin(process.argv)).options({
         describe: 'Representative Private Key for Voting. You can only specify up to 31 representatives.',
         array: true
     }
-    
+
 }).check(function (argv) {
     if (Array.isArray(argv.port)) {
         throw new Error('Argument check failed: Multiple instances of option port.');

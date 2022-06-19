@@ -1,6 +1,18 @@
 const blake2 = require('blake2');
 const { base58_to_binary, binary_to_base58 } = require('base58-js')
 
+function readBigUInt128BE(buffer, offset) {
+    let result = buffer.readBigUInt64BE(offset) << 64n;
+    result |= buffer.readBigUInt64BE(offset + 8);
+
+    return result;
+}
+
+function writeBigUInt128BE(buffer, value, offset) {
+    buffer.writeBigUInt64BE(value >> 64n, offset);
+    buffer.writeBigUInt64BE(value & 0xffffffffffffffffn, offset + 8);
+}
+
 function getScalarKey(privateKey) {
     let h = blake2.createHash('blake2b', { digestLength: 64 });
     h.update(privateKey);
@@ -56,5 +68,7 @@ module.exports = {
     hashBlock,
     encodeAddress,
     decodeAddress,
-    getScalarKey
+    getScalarKey,
+    readBigUInt128BE,
+    writeBigUInt128BE
 }
