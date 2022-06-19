@@ -236,7 +236,9 @@ function insertBlock(block, bypassCheck, callback) {
                     txn.abort();
                 }
 
-                callback(result);
+                if (callback) {
+                    callback(result);
+                }
             }
         );
     } else {

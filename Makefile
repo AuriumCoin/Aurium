@@ -1,11 +1,16 @@
+define main
+	esbuild index.js --bundle --outfile=out.js --platform=node --external:./node_modules/*
+	minify out.js > aurium.js
+endef
+
 main-win32:
-	esbuild index.js --bundle --outfile=out.js --platform=node --external:./node_modules/*
-	minify out.js > aurium.js
+	$(main)
 	del out.js
+
 main-linux:
-	esbuild index.js --bundle --outfile=out.js --platform=node --external:./node_modules/*
-	minify out.js > aurium.js
+	$(main)
 	rm ./out.js
+
 install:
 	npm install
 	npm i minify -g
