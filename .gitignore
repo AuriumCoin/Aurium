@@ -1,3 +1,4 @@
 node_modules/
 data/
-.vscode/settings.json
+.vscode/
+aurium.js

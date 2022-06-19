@@ -227,7 +227,7 @@ function preProccessBlock(block, bypassCheck) {
 }
 
 function insertBlock(block, bypassCheck, callback) {
-    const preProcessResult = preProccessBlock(block, bypassCheck)
+    const preProcessResult = preProccessBlock(block, bypassCheck); // Pre Proccesing by itself isn't secure. Only used for filtering spam blocks
     
     if (preProcessResult == 0) {
         envQueue.requestTxn(
@@ -310,5 +310,5 @@ console.log(listPending())
 
 module.exports = {
     INSERT_RESULT_CODES,
-
+    insertBlock
 }

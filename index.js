@@ -3,6 +3,8 @@ const server = dgram.createSocket('udp6');
 const DNS = require('dns');
 const ip6addr = require('ip6addr');
 
+const ledger = require("./database.js");
+
 const ed25519 = require('./ed25519.js');
 const crypto = require('crypto');
 const blake2 = require('blake2');
