@@ -2,8 +2,12 @@ const ed25519 = require('./ed25519.js');
 
 const {
     GENESIS_PUBLIC,
-    GENESIS_ADDRESS
+    GENESIS_ADDRESS,
+    HASH_BLOCK_SIZES,
+    BLOCK_TYPES
 } = require('./constants.js');
+
+const EventEmitter = require('events');
 
 const txnQueue = require('./txnQueue.js');
 
@@ -14,6 +18,8 @@ const {
     readBigUInt128BE,
     writeBigUInt128BE
 } = require('./utils.js')
+
+const ledgerEvents = new EventEmitter();
 
 const lmdb = require('node-lmdb');
 const fs = require('fs');
@@ -45,16 +51,6 @@ const accountDBI = env.openDbi({
     create: true,
     keyIsBuffer: true
 });
-
-const BLOCK_TYPES = {
-    SEND: 0,
-    SPLIT: 1,
-    CLAIM: 2
-}
-
-const BLOCK_SIZES = {
-    [BLOCK_TYPES.SEND]: 121
-}
 
 function encodeRPCBlock(blockInfo) {
     if (BLOCK_TYPES[blockInfo.type] === undefined) throw Error("Block Type doesn't exist.");
@@ -121,7 +117,7 @@ function _insertBlock(txn, block, bypassCheck) {
     const BLOCK_INFO = decodeBlock(block);
     if (BLOCK_INFO == null) return 1;
     const BLOCK_TYPE = block[0];
-    const BLOCK_SIZE = BLOCK_SIZES[BLOCK_TYPE];
+    const BLOCK_SIZE = HASH_BLOCK_SIZES[BLOCK_TYPE];
 
     const hash = hashBlock(block.subarray(0, BLOCK_SIZE));
 
@@ -190,7 +186,7 @@ function _preProccessBlock(txn, block, bypassCheck) {
     const BLOCK_INFO = decodeBlock(block);
     if (BLOCK_INFO == null) return 1;
     const BLOCK_TYPE = block[0];
-    const BLOCK_SIZE = BLOCK_SIZES[BLOCK_TYPE];
+    const BLOCK_SIZE = HASH_BLOCK_SIZES[BLOCK_TYPE];
 
     const hash = hashBlock(block.subarray(0, BLOCK_SIZE));
 
@@ -244,7 +240,6 @@ function insertBlock(block, bypassCheck, callback) {
             }
         );
     } else {
-        console.log("Pre Process Failed")
         callback(preProcessResult);
     }
 
@@ -252,7 +247,7 @@ function insertBlock(block, bypassCheck, callback) {
 }
 
 insertBlock(genesisBlock, true, (result) => {
-    console.log(INSERT_RESULT_CODES[result])
+    //console.log(INSERT_RESULT_CODES[result])
 });
 
 function listAccounts() {
@@ -306,9 +301,10 @@ function listPending() {
     return list;
 }
 
-console.log(listPending())
+//console.log(listPending())
 
 module.exports = {
     INSERT_RESULT_CODES,
-    insertBlock
+    insertBlock,
+    ledgerEvents
 }

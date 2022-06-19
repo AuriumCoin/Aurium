@@ -5,6 +5,10 @@ Message Opcodes:
  2 = Peer List
 */
 
+const {
+    BLOCK_SIZES
+} = require("./constants.js");
+
 function encodeHeader(opcode, extensions) {
     if (opcode > 0x1F) throw Error("Opcode is above 5 bits");
     if (extensions > 0x7FF) throw Error("Extensions is above 11 bits");
@@ -45,6 +49,15 @@ function getBodySize(headerinfo) {
         case 2: {
             const peerCount = headerinfo.extensions & 15;
             return (18*peerCount) + 32;
+        }
+        case 3: {
+            const BLOCK_TYPE = headerinfo.extensions & 0xff;
+            const BLOCK_SIZE = BLOCK_SIZES[BLOCK_TYPE];
+            if (BLOCK_SIZE) {
+                return BLOCK_SIZE - 1;
+            } else {
+                return null;
+            }
         }
     }
     
