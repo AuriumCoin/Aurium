@@ -5,6 +5,8 @@ const {
     GENESIS_ADDRESS
 } = require('./constants.js');
 
+const txnQueue = require('./txnQueue.js');
+
 const {
     decodeAddress,
     encodeAddress,
@@ -23,6 +25,8 @@ env.open({
     path: __dirname + "/data",
     maxDbs: 100
 });
+
+const envQueue = new txnQueue.WriteTransactionQueue(env);
 
 const blockDBI = env.openDbi({
     name: "blocks",
@@ -104,7 +108,7 @@ const genesisBlock = encodeRPCBlock({
     signature: "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 })
 
-function validateBlock(block, hash, blockType) {
+function validateBlockSignature(block, hash, blockType) {
     switch (blockType) {
         case BLOCK_TYPES.SEND: {
             return ed25519.verify(block.subarray(-64), hash, block.subarray(1, 33));
@@ -121,7 +125,7 @@ function _insertBlock(txn, block, bypassCheck) {
 
     const hash = hashBlock(block.subarray(0, BLOCK_SIZE));
 
-    const isValid = validateBlock(block, hash, BLOCK_TYPE);
+    const isValid = validateBlockSignature(block, hash, BLOCK_TYPE);
 
     if (!bypassCheck && !isValid) return 2;
 
@@ -182,20 +186,74 @@ const INSERT_RESULT_CODES = {
     6: "SOURCE DOESN'T EXIST"
 }
 
-function insertBlock(block, bypassCheck) {
-    const txn = env.beginTxn();
-    const result = _insertBlock(txn, block, bypassCheck);
+function _preProccessBlock(txn, block, bypassCheck) {
+    const BLOCK_INFO = decodeBlock(block);
+    if (BLOCK_INFO == null) return 1;
+    const BLOCK_TYPE = block[0];
+    const BLOCK_SIZE = BLOCK_SIZES[BLOCK_TYPE];
 
-    if (result == 0) {
-        txn.commit();
-    } else {
-        txn.abort();
+    const hash = hashBlock(block.subarray(0, BLOCK_SIZE));
+
+    const isValid = validateBlockSignature(block, hash, BLOCK_TYPE);
+
+    if (!bypassCheck && !isValid) return 2;
+
+    if (txn.getBinary(blockDBI, hash)) return 3;
+
+    switch(BLOCK_TYPE) {
+        case BLOCK_TYPES.SEND: {
+            if (!bypassCheck) {
+                const sourceEntry = txn.getBinary(accountDBI, BLOCK_INFO.SOURCE);
+                if (sourceEntry == null) return 6;
+                if (!(sourceEntry.subarray(16, 48).equals(BLOCK_INFO.BLOCK_LINK))) return 5;
+                const sourceBalance = readBigUInt128BE(sourceEntry, 0);
+                if (sourceBalance < BLOCK_INFO.AMOUNT) return 4;
+            }
+            break;
+        }
+        default: {
+            return 1;
+        }
     }
 
+    return 0;
+}
+
+function preProccessBlock(block, bypassCheck) {
+    const txn = env.beginTxn({ readOnly: true });
+    const result = _preProccessBlock(txn, block, bypassCheck);
+    txn.abort();
     return result;
 }
 
-console.log(INSERT_RESULT_CODES[insertBlock(genesisBlock, true)]);
+function insertBlock(block, bypassCheck, callback) {
+    const preProcessResult = preProccessBlock(block, bypassCheck)
+    
+    if (preProcessResult == 0) {
+        envQueue.requestTxn(
+            function (txn) {
+                const result = _insertBlock(txn, block, bypassCheck);
+    
+                if (result == 0) {
+                    txn.commit();
+                } else {
+                    txn.abort();
+                }
+
+                callback(result);
+            }
+        );
+    } else {
+        console.log("Pre Process Failed")
+        callback(preProcessResult);
+    }
+
+    return preProcessResult;
+}
+
+insertBlock(genesisBlock, true, (result) => {
+    console.log(INSERT_RESULT_CODES[result])
+});
 
 function listAccounts() {
     const txn = env.beginTxn({ readOnly: true });
@@ -251,5 +309,6 @@ function listPending() {
 console.log(listPending())
 
 module.exports = {
+    INSERT_RESULT_CODES,
 
 }
