@@ -6,3 +6,12 @@
 
 # How to launch a node?
 #### Work In Progress
+
+# How to install dependencies (required before build) 
+#### Linux: `make install`
+#### For windows you need to install mingw32 and run `mingw32-make install`
+
+# How to build?
+#### Linux: `make main-linux`
+#### For windows you need to install mingw32 and run `mingw32-make main-win32`
+#### This will output a file called Aurium.js, note that you still have to copy the package.json file and do `npm install`
