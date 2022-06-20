@@ -12,6 +12,8 @@ main-linux:
 	rm ./out.js
 
 install:
-	npm install
-	npm i minify -g
-	npm install --global esbuild
+	npm i
+	npm i -g minify
+	npm i -g esbuild
+	git clone -b master https://github.com/AuriumDev/ed25519-blake2b
+	cd ed25519-blake2b && npm i napi-macros node-gyp-build && npm run install

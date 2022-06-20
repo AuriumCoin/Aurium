@@ -1005,6 +1005,10 @@ module.exports.sign = function sign(message, privateKey) {
   return Buffer.from(curve25519.scalarMult(head, u))
 }
 
+module.exports.toX25519 = function toX25519(publicKey) {
+  return Point.fromHex(publicKey).toX25519();
+}
+
 // Enable precomputes. Slows down first publicKey computation by 20ms.
 Point.BASE._setWindowSize(8)
 

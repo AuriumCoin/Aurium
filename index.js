@@ -5,14 +5,57 @@ const ip6addr = require('ip6addr');
 
 const ledger = require("./database.js");
 
+const ed25519_blake2b = require('./ed25519-blake2b/index.js');
+
 const ed25519 = require('./ed25519.js');
 const crypto = require('crypto');
 const blake2 = require('blake2');
 
 const startHTTPAPI = require('./http-api.js');
 
+const ECDH_basepoint = new Uint8Array(32);
+ECDH_basepoint[0] = 9;
+
 const NodeSecretKey = crypto.randomBytes(64);
-const NodePublicKey = ed25519.getPublicKey(NodeSecretKey);
+const NodePublicKey = ed25519_blake2b.publicKeyRaw(NodeSecretKey); //ed25519.getPublicKey(NodeSecretKey);
+
+function getSharedSecret(secretKey, publicKey) {
+    const sharedSecret = Buffer.alloc(32);
+    ed25519_blake2b.bindings.node_ecdh(sharedSecret, secretKey, ed25519.toX25519(publicKey));
+
+    return sharedSecret;
+}
+
+function test_ed25519() {
+    const TestSecretKey = crypto.randomBytes(64);
+    const TestPublicKey = ed25519_blake2b.publicKeyRaw(TestSecretKey);
+    
+    const sharedSecret = Buffer.from(ed25519.getSharedSecret(
+        NodeSecretKey,
+        TestPublicKey
+    ));
+    
+    const sharedSecret2 = getSharedSecret(
+        TestSecretKey,
+        NodePublicKey
+    );
+    
+    const ed25519_test1 = sharedSecret2.equals(sharedSecret);
+    const ed25519_test2 = NodePublicKey.equals(Buffer.from(ed25519.getPublicKey(NodeSecretKey)));
+    
+    const ed25519_testPass = ed25519_test1 && ed25519_test2;
+
+    console.log("ED25519 Shared Secrets, passed?", ed25519_test1);
+    console.log("ED25519 Public Keys, passed?", ed25519_test2, "\n");
+    
+    console.log("Is ED25519 Configured Properly?", ed25519_testPass);
+    
+    if (!ed25519_testPass) {
+        process.exit();
+    }
+}
+
+test_ed25519();
 
 const { isIPv4, isIPv6 } = require('net');
 
@@ -304,7 +347,7 @@ server.on('message', (msg, rinfo) => {
             if (hasCookie) {
                 const NodeID = body.subarray(32, 64);
                 if (NodeID.equals(NodePublicKey)) return;
-                const sharedSecret = ed25519.getSharedSecret(
+                const sharedSecret = getSharedSecret(
                     NodeSecretKey,
                     NodeID
                 )
