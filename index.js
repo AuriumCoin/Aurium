@@ -5,6 +5,10 @@ const ip6addr = require('ip6addr');
 
 const ledger = require("./database.js");
 
+const {
+    PEER_EXPIRY
+} = require("./constants.js");
+
 const ed25519_blake2b = require('./ed25519-blake2b/index.js');
 
 const ed25519 = require('./ed25519.js');
@@ -326,6 +330,19 @@ function sendPeers(peers, address, port, sharedSecret, cookie) {
     )
 }
 
+function broadcastBlock(block) {
+    const message = Buffer.concat([
+        encodeHeader(2, block[0]),
+        block.subarray(1)
+    ]);
+    for (const [key, value] of peerList.entries()) {
+        if (value.isConnected === true && ((Date.now() - value.lastPing) < PEER_EXPIRY)) {
+            const rinfo = decodeConnectionInfo(Buffer.from(key, 'binary'));
+            server.send(message, rinfo.port, rinfo.address);
+        }
+    }
+}
+
 server.on('message', (msg, rinfo) => {
     if (msg.length < 2) return;
     const header = decodeHeader(msg);
@@ -448,10 +465,25 @@ server.on('message', (msg, rinfo) => {
 
             break;
         }
+
+        case 3: {
+            const block = Buffer.alloc(body.length + 1);
+            block[0] = header.extensions & 0xff;
+            block.set(body, 1);
+
+            ledger.insertBlock({
+                block,
+                callback: function (result) {
+                    if (result == 1) {
+                        broadcastBlock(block);
+                    }
+                }
+            });
+            break;
+        }
+        
     }
 });
-
-const PEER_EXPIRY = 2 * 60 * 1000;
 
 setInterval(() => {
     for (const [key, value] of peerList.entries()) {

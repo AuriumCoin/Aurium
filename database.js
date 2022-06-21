@@ -74,7 +74,7 @@ function encodeRPCBlock(blockInfo) {
 function decodeBlock(block) {
     switch (block[0]) {
         case BLOCK_TYPES.SEND: {
-            const SOURCE = block.subarray(1, 33);
+            const SOURCE = block.subarray(1, 33); // Sender
             const RECIPIENT = block.subarray(33, 65);
             const AMOUNT = readBigUInt128BE(block, 65);
             const BLOCK_LINK = block.subarray(81, 113);
@@ -84,6 +84,20 @@ function decodeBlock(block) {
                 SOURCE,
                 RECIPIENT,
                 AMOUNT,
+                BLOCK_LINK,
+                TIMESTAMP,
+                SIGNATURE
+            }
+        }
+        case BLOCK_TYPES.RECEIVE {
+            const RECIPIENT = block.subarray(1, 33);
+            const SOURCE = block.subarray(33, 65); // Block Hash
+            const BLOCK_LINK = block.subarray(65, 97);
+            const TIMESTAMP = block.readBigUInt64BE(97);
+            const SIGNATURE = block.subarray(105, 169);
+            return {
+                RECIPIENT,
+                SOURCE,
                 BLOCK_LINK,
                 TIMESTAMP,
                 SIGNATURE
@@ -106,11 +120,35 @@ const genesisBlock = encodeRPCBlock({
 
 function validateBlockSignature(block, hash, blockType) {
     switch (blockType) {
+        case BLOCK_TYPES.RECEIVE:
         case BLOCK_TYPES.SEND: {
             return ed25519.verify(block.subarray(-64), hash, block.subarray(1, 33));
         }
     }
     return false;
+}
+
+const NULL_BLOCK = Buffer.alloc(32, 0);
+
+class AccountInfo {
+    static encode(balance, head) {
+        const accountInfo = Buffer.alloc(48);
+        writeBigUInt128BE(accountInfo, balance, 0);
+        accountInfo.set(head, 16);
+    }
+    static decode(accountInfo) {
+        if (accountInfo == null) {
+            return {
+                balance: 0n,
+                head: NULL_BLOCK
+            }
+        } else {
+            return {
+                balance: readBigUInt128BE(accountInfo, 0),
+                head: accountInfo.subarray(16, 48)
+            }
+        }
+    }
 }
 
 function _insertBlock(txn, block, bypassCheck) {
@@ -131,7 +169,7 @@ function _insertBlock(txn, block, bypassCheck) {
         case BLOCK_TYPES.SEND: {
             if (!bypassCheck) {
                 const sourceEntry = txn.getBinary(accountDBI, BLOCK_INFO.SOURCE);
-                if (sourceEntry == null) return 6;
+                if (sourceEntry == null) return 4;
 
                 if (!(sourceEntry.subarray(16, 48).equals(BLOCK_INFO.BLOCK_LINK))) return 5;
 
@@ -139,16 +177,31 @@ function _insertBlock(txn, block, bypassCheck) {
 
                 if (sourceBalance < BLOCK_INFO.AMOUNT) return 4;
 
-                writeBigUInt128BE(sourceEntry, sourceBalance - BLOCK_INFO.AMOUNT, 0);
+                const newBalance = sourceBalance - BLOCK_INFO.AMOUNT;
+
+                writeBigUInt128BE(sourceEntry, newBalance, 0);
                 sourceEntry.set(hash, 16);
+
+                ledgerEvents.emit("balanceUpdate", {
+                    account: BLOCK_INFO.SOURCE,
+                    balance: newBalance
+                })
 
                 txn.putBinary(accountDBI, BLOCK_INFO.SOURCE, sourceEntry);
             }
 
+            const blockAmount = Buffer.alloc(16);
+            writeBigUInt128BE(blockAmount, BLOCK_INFO.AMOUNT, 0);
+
             txn.putBinary(pendingDBI, Buffer.concat([
                 BLOCK_INFO.RECIPIENT,
                 hash
-            ]), Buffer.from([]));
+            ]), blockAmount);
+
+            ledgerEvents.emit("pending", {
+                account: BLOCK_INFO.RECIPIENT,
+                block: hash
+            })
 
             /*const destEntry = txn.getBinary(accountDBI, BLOCK_INFO.RECIPIENT);
             if (destEntry) {
@@ -163,6 +216,33 @@ function _insertBlock(txn, block, bypassCheck) {
             }*/
             break;
         }
+        case BLOCK_TYPES.RECEIVE: {
+            const pendingKey = Buffer.concat([
+                BLOCK_INFO.RECIPIENT,
+                BLOCK_INFO.SOURCE
+            ]);
+            const pendingBlock = txn.getBinary(pendingDBI, pendingKey);
+            if (!pendingBlock) return 6;
+            const recieveAmount = readBigUInt128BE(pendingBlock, 0);
+            txn.del(pendingDBI, pendingKey);
+
+            const accountInfo = AccountInfo.decode(txn.getBinary(accountDBI, BLOCK_INFO.RECIPIENT));
+            if (!BLOCK_INFO.BLOCK_LINK.equals(accountInfo.head)) return 5;
+
+            const newBalance = accountInfo.balance + recieveAmount;
+
+            ledgerEvents.emit("balanceUpdate", {
+                account: BLOCK_INFO.RECIPIENT,
+                balance: newBalance
+            })
+
+            txn.putBinary(accountDBI, BLOCK_INFO.RECIPIENT, AccountInfo.encode(
+                newBalance,
+                hash
+            ));
+
+            break;
+        }
         default: {
             return 1;
         }
@@ -173,13 +253,14 @@ function _insertBlock(txn, block, bypassCheck) {
 }
 
 const INSERT_RESULT_CODES = {
-    0: "SUCCESS",
-    1: "INVALID BLOCK",
-    2: "MALFORMED SIGNATURE",
-    3: "BLOCK ALREADY EXISTS",
-    4: "SOURCE DOESN'T HAVE SUFFICENT BALANCE",
-    5: "INVALID FRONTIER",
-    6: "SOURCE DOESN'T EXIST"
+    0: "Success",
+    1: "Invalid Block Format",
+    2: "Signature is invalid",
+    3: "Block is already published",
+    4: "Source Account doesn't have sufficent balance to furfill transaction.",
+    5: "Invalid Head Block",
+    6: "Source is invaid",
+
 }
 
 function _preProccessBlock(txn, block, bypassCheck) {
@@ -222,7 +303,11 @@ function preProccessBlock(block, bypassCheck) {
     return result;
 }
 
-function insertBlock(block, bypassCheck, callback) {
+function insertBlock({
+    block,
+    bypassCheck = false,
+    callback = null
+}) {
     const preProcessResult = preProccessBlock(block, bypassCheck); // Pre Proccesing by itself isn't secure. Only used for filtering spam blocks
     
     if (preProcessResult == 0) {
@@ -248,9 +333,13 @@ function insertBlock(block, bypassCheck, callback) {
     return preProcessResult;
 }
 
-insertBlock(genesisBlock, true, (result) => {
-    //console.log(INSERT_RESULT_CODES[result])
-});
+insertBlock({
+    block: genesisBlock,
+    bypassCheck: true,
+    callback: function (result) {
+        //console.log(INSERT_RESULT_CODES[result])
+    }
+})
 
 function listAccounts() {
     const txn = env.beginTxn({ readOnly: true });
