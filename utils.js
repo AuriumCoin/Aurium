@@ -1,4 +1,4 @@
-const blake2 = require('blake2');
+const ed25519_blake2b = require('./ed25519-blake2b/index.js');
 const { base58_to_binary, binary_to_base58 } = require('base58-js')
 
 function readBigUInt128BE(buffer, offset) {
@@ -14,9 +14,7 @@ function writeBigUInt128BE(buffer, value, offset) {
 }
 
 function getScalarKey(privateKey) {
-    let h = blake2.createHash('blake2b', { digestLength: 64 });
-    h.update(privateKey);
-    h = h.digest();
+    const h = ed25519_blake2b.hash(privateKey, 64);
     h[0] &= 248;
     h[31] &= 127;
     h[31] |= 64;
@@ -25,9 +23,7 @@ function getScalarKey(privateKey) {
 }
 
 function hashBlock(block, isUniversal) {
-    const h = blake2.createHash('blake2b', { digestLength: 32 });
-    h.update(block);
-    const hash = h.digest();
+    const hash = ed25519_blake2b.hash(block, 32);
     /*if (isUniversal) {
         hash[0] |= 0x80;
     } else {
@@ -37,9 +33,7 @@ function hashBlock(block, isUniversal) {
 }
 
 function encodeAddress(publicKey) {
-    let checksum = blake2.createHash('blake2b', { digestLength: 8 });
-    checksum.update(publicKey);
-    checksum = checksum.digest();
+    const checksum = ed25519_blake2b.hash(block, 8);
 
     return "aur_" + binary_to_base58(Buffer.concat([
         publicKey,
@@ -53,9 +47,7 @@ function decodeAddress(address) {
         base58_to_binary(address.slice(4))
     );
 
-    let checksum = blake2.createHash('blake2b', { digestLength: 8 });
-    checksum.update(decoded.subarray(0, 32));
-    checksum = checksum.digest();
+    const checksum = ed25519_blake2b.hash(decoded.subarray(0, 32), 8);
 
     if (checksum.equals(decoded.subarray(32))) {
         return decoded.subarray(0, 32);

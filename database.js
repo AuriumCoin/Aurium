@@ -1,4 +1,4 @@
-const ed25519 = require('./ed25519.js');
+const ed25519_blake2b = require('./ed25519-blake2b/index.js');
 
 const {
     GENESIS_ADDRESS,
@@ -121,7 +121,7 @@ function validateBlockSignature(block, hash, blockType) {
     switch (blockType) {
         case BLOCK_TYPES.RECEIVE:
         case BLOCK_TYPES.SEND: {
-            return ed25519.verify(block.subarray(-64), hash, block.subarray(1, 33));
+            return ed25519_blake2b.verify(block.subarray(-64), hash, block.subarray(1, 33));
         }
     }
     return false;

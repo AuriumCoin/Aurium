@@ -6,7 +6,7 @@
 // Uses built-in crypto module from node.js to generate randomness.
 // In browser the line is automatically removed during build time: uses crypto.subtle instead.
 const crypto = require('crypto');
-const blake2 = require('blake2');
+const ed25519_blake2b = require('./ed25519-blake2b/index.js');
 
 // Be friendly to bad ECMAScript parsers by not using bigint literals like 123n
 const _0n = BigInt(0)
@@ -1155,9 +1155,7 @@ const utils = {
     return utils.randomBytes(32)
   },
   hash: (message) => {
-    const blake2b = blake2.createHash('blake2b')
-    blake2b.update(message)
-    return blake2b.digest()
+    return ed25519_blake2b.hash(message, 64);
   },
   /**
    * We're doing scalar multiplication (used in getPublicKey etc) with precomputed BASE_POINT
