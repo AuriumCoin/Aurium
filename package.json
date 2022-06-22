@@ -1,6 +1,6 @@
 {
-  "name": "auirum-node",
-  "version": "1.0.0",
+  "name": "aurium",
+  "version": "0.0.1",
   "description": "Aurium is a coin which is designed to handle a high TPS and without requirement of fees.",
   "main": "index.js",
   "repository": {
@@ -22,6 +22,7 @@
     "express": "^4.18.1",
     "ip6addr": "^0.2.5",
     "node-lmdb": "^0.9.7",
+    "ws": "^8.8.0",
     "yargs": "^17.5.1"
   }
 }

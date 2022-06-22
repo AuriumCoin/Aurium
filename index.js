@@ -170,14 +170,11 @@ function isArgTrue(arg) {
     return false;
 }
 
-const defaultPeerList = [];
-
-
 const peerList = new Map();
 
 const nodeState = {
     peerList,
-
+    ledger
 }
 
 /* 
@@ -244,31 +241,30 @@ function establishConnection(address, port, raw) {
     ]), port, address);
 }
 
-for (const peer of argv['default-peer']) {
-    if (peer === "0") break;
-    const peerSegments = peer.split(":");
-    const port = Number(peerSegments[peerSegments.length-1]);
-    const address = peerSegments.slice(0, -1).join(":");
-
-    if (isIPv4(address)) {
-        const buf = Buffer.alloc(18);
-        const rawAddress = ip6addr.parse('::ffff:'+address).toBuffer();
-        buf.set(rawAddress);
-        buf.writeUInt16LE(port, 16);
-        defaultPeerList.push(buf);
-
-        establishConnection('::ffff:'+address, port, buf);
-    } else if (isIPv6(address)) {
-        const buf = Buffer.alloc(18);
-        const rawAddress = ip6addr.parse(address).toBuffer();
-        buf.set(rawAddress);
-        buf.writeUInt16LE(port, 16);
-        defaultPeerList.push(buf);
-
-
-        establishConnection(address, port, buf);
-    } else {
-        throw Error('DNS not supported yet.');
+function connectDefault() {
+    for (const peer of argv['default-peer']) {
+        if (peer === "0") break;
+        const peerSegments = peer.split(":");
+        const port = Number(peerSegments[peerSegments.length-1]);
+        const address = peerSegments.slice(0, -1).join(":");
+    
+        if (isIPv4(address)) {
+            const buf = Buffer.alloc(18);
+            const rawAddress = ip6addr.parse('::ffff:'+address).toBuffer();
+            buf.set(rawAddress);
+            buf.writeUInt16LE(port, 16);
+    
+            establishConnection('::ffff:'+address, port, buf);
+        } else if (isIPv6(address)) {
+            const buf = Buffer.alloc(18);
+            const rawAddress = ip6addr.parse(address).toBuffer();
+            buf.set(rawAddress);
+            buf.writeUInt16LE(port, 16);
+    
+            establishConnection(address, port, buf);
+        } else {
+            throw Error('DNS not supported yet.');
+        }
     }
 }
 
@@ -521,6 +517,8 @@ server.on('listening', () => {
     console.log(`Socket listening ${address.address}:${address.port}`);
 
     if (argv.httpPort) {
-        startHTTPAPI(nodeState, argv.httpPort)
+        startHTTPAPI(nodeState, argv.httpPort);
     }
+
+    connectDefault();
 });

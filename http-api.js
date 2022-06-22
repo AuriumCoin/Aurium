@@ -1,6 +1,9 @@
 let nodeState;
-const express = require('express')
-const app = express()
+const express = require('express');
+const app = express();
+const WebSocket = require("ws");
+
+app.use(express.json());
 
 const PEER_EXPIRY = 2 * 60 * 1000;
 
@@ -16,11 +19,32 @@ app.get('/', function (req, res) {
     res.json({
         peerCount
     })
-})
-  
+});
+
+function setupWSS(hServer) {
+    const wss = new WebSocket.Server({
+        noServer: true,
+        path: "/ws",
+    });
+    
+    hServer.on("upgrade", (request, socket, head) => {
+        wss.handleUpgrade(request, socket, head, (websocket) => {
+            wss.emit("connection", websocket, request);
+        });
+    });
+    
+    wss.on('connection', function connection(ws) {
+        ws.on('message', function message(data) {
+          console.log(data)
+        });      
+    });
+}
+
+
+
 function start(state, port) {
     nodeState = state;
-    app.listen(port)
+    setupWSS(app.listen(port));
 }
 
 module.exports = start;

@@ -1,7 +1,6 @@
 const ed25519 = require('./ed25519.js');
 
 const {
-    GENESIS_PUBLIC,
     GENESIS_ADDRESS,
     HASH_BLOCK_SIZES,
     BLOCK_TYPES
@@ -89,7 +88,7 @@ function decodeBlock(block) {
                 SIGNATURE
             }
         }
-        case BLOCK_TYPES.RECEIVE {
+        case BLOCK_TYPES.RECEIVE: {
             const RECIPIENT = block.subarray(1, 33);
             const SOURCE = block.subarray(33, 65); // Block Hash
             const BLOCK_LINK = block.subarray(65, 97);
