@@ -42,10 +42,12 @@ function encodeAddress(publicKey) {
 }
 
 function decodeAddress(address) {
-    if (!address.startsWith("aur_")) throw Error("Address isn't an Aurium Address");
+    if (!address.startsWith("aur_")) throw Error("Invalid Address");
     const decoded = Buffer.from(
         base58_to_binary(address.slice(4))
     );
+
+    if (decoded.length !== 40) throw Error("Invalid Address");
 
     const checksum = ed25519_blake2b.hash(decoded.subarray(0, 32), 8);
 

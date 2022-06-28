@@ -11,7 +11,7 @@ const {
 
 const ed25519_blake2b = require('./ed25519-blake2b/index.js');
 
-const ed25519 = require('./ed25519.js');
+const ed25519 = require('./ed25519-light.js');
 const crypto = require('crypto');
 const blake2 = require('blake2');
 
@@ -31,10 +31,12 @@ function getSharedSecret(secretKey, publicKey) {
 }
 
 function test_ed25519() {
+    const old_ed25519 = require('./ed25519.js');
+
     const TestSecretKey = crypto.randomBytes(64);
     const TestPublicKey = ed25519_blake2b.publicKeyRaw(TestSecretKey);
     
-    const sharedSecret = Buffer.from(ed25519.getSharedSecret(
+    const sharedSecret = Buffer.from(old_ed25519.getSharedSecret(
         NodeSecretKey,
         TestPublicKey
     ));
@@ -45,7 +47,7 @@ function test_ed25519() {
     );
     
     const ed25519_test1 = sharedSecret2.equals(sharedSecret);
-    const ed25519_test2 = NodePublicKey.equals(Buffer.from(ed25519.getPublicKey(NodeSecretKey)));
+    const ed25519_test2 = NodePublicKey.equals(Buffer.from(old_ed25519.getPublicKey(NodeSecretKey)));
     
     const ed25519_testPass = ed25519_test1 && ed25519_test2;
 
@@ -469,17 +471,21 @@ server.on('message', (msg, rinfo) => {
 
             ledger.insertBlock({
                 block,
-                callback: function (result) {
-                    if (result == 1) {
+                /*callback: function (result) {
+                    if (result == 0) {
                         broadcastBlock(block);
                     }
-                }
+                }*/
             });
             break;
         }
-        
+
     }
 });
+
+ledger.ledgerEvents.on("blockInserted", (block) => {
+    broadcastBlock(block);
+})
 
 setInterval(() => {
     for (const [key, value] of peerList.entries()) {

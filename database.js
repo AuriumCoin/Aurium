@@ -3,7 +3,8 @@ const ed25519_blake2b = require('./ed25519-blake2b/index.js');
 const {
     GENESIS_ADDRESS,
     HASH_BLOCK_SIZES,
-    BLOCK_TYPES
+    BLOCK_TYPES,
+    NULL_BLOCK
 } = require('./constants.js');
 
 const EventEmitter = require('events');
@@ -55,7 +56,7 @@ function encodeRPCBlock(blockInfo) {
     if (BLOCK_TYPES[blockInfo.type] === undefined) throw Error("Block Type doesn't exist.");
     switch (blockInfo.type) {
         case "SEND": {
-            const block = Buffer.alloc(185);
+            const block = Buffer.alloc(201);
             block[0] = BLOCK_TYPES.SEND;
             block.set(decodeAddress(blockInfo.source), 1);
             block.set(decodeAddress(blockInfo.recipient), 33);
@@ -63,8 +64,9 @@ function encodeRPCBlock(blockInfo) {
             writeBigUInt128BE(block, BigInt(blockInfo.amount), 65);
 
             block.set(Buffer.from(blockInfo.blockLink, "hex"), 81);
-            block.writeBigUInt64BE(BigInt(blockInfo.timestamp), 113);
-            block.set(Buffer.from(blockInfo.signature, "hex"), 121);
+            block.set(Buffer.from(blockInfo.reference, "hex"), 113);
+            block.writeBigUInt64BE(BigInt(blockInfo.timestamp), 129);
+            block.set(Buffer.from(blockInfo.signature, "hex"), 137);
             return block;
         }
     }
@@ -73,33 +75,35 @@ function encodeRPCBlock(blockInfo) {
 function decodeBlock(block) {
     switch (block[0]) {
         case BLOCK_TYPES.SEND: {
-            const SOURCE = block.subarray(1, 33); // Sender
-            const RECIPIENT = block.subarray(33, 65);
-            const AMOUNT = readBigUInt128BE(block, 65);
-            const BLOCK_LINK = block.subarray(81, 113);
-            const TIMESTAMP = block.readBigUInt64BE(113);
-            const SIGNATURE = block.subarray(121, 185);
+            const source = block.subarray(1, 33); // Sender
+            const recipient = block.subarray(33, 65);
+            const amount = readBigUInt128BE(block, 65);
+            const blockLink = block.subarray(81, 113);
+            const reference = block.subarray(113, 129);
+            const timestamp = block.readBigUInt64BE(129);
+            const signature = block.subarray(137, 201);
             return {
-                SOURCE,
-                RECIPIENT,
-                AMOUNT,
-                BLOCK_LINK,
-                TIMESTAMP,
-                SIGNATURE
+                source,
+                recipient,
+                amount,
+                blockLink,
+                reference,
+                timestamp,
+                signature
             }
         }
         case BLOCK_TYPES.RECEIVE: {
-            const RECIPIENT = block.subarray(1, 33);
-            const SOURCE = block.subarray(33, 65); // Block Hash
-            const BLOCK_LINK = block.subarray(65, 97);
-            const TIMESTAMP = block.readBigUInt64BE(97);
-            const SIGNATURE = block.subarray(105, 169);
+            const recipient = block.subarray(1, 33);
+            const source = block.subarray(33, 65); // Block Hash
+            const blockLink = block.subarray(65, 97);
+            const timestamp = block.readBigUInt64BE(97);
+            const signature = block.subarray(105, 169);
             return {
-                RECIPIENT,
-                SOURCE,
-                BLOCK_LINK,
-                TIMESTAMP,
-                SIGNATURE
+                recipient,
+                source,
+                blockLink,
+                timestamp,
+                signature
             }
         }
     }
@@ -113,6 +117,7 @@ const genesisBlock = encodeRPCBlock({
     recipient: GENESIS_ADDRESS,
     amount: "15000000000000",
     blockLink: "0000000000000000000000000000000000000000000000000000000000000000",
+    reference: "53a7257123db5568cb0cd0edb420dee3",
     timestamp: "1654549740842",
     signature: "00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
 })
@@ -127,13 +132,13 @@ function validateBlockSignature(block, hash, blockType) {
     return false;
 }
 
-const NULL_BLOCK = Buffer.alloc(32, 0);
-
 class AccountInfo {
     static encode(balance, head) {
         const accountInfo = Buffer.alloc(48);
         writeBigUInt128BE(accountInfo, balance, 0);
         accountInfo.set(head, 16);
+
+        return accountInfo;
     }
     static decode(accountInfo) {
         if (accountInfo == null) {
@@ -151,94 +156,87 @@ class AccountInfo {
 }
 
 function _insertBlock(txn, block, bypassCheck) {
-    const BLOCK_INFO = decodeBlock(block);
-    if (BLOCK_INFO == null) return 1;
-    const BLOCK_TYPE = block[0];
-    const BLOCK_SIZE = HASH_BLOCK_SIZES[BLOCK_TYPE];
+    const blockInfo = decodeBlock(block);
+    if (blockInfo == null) return 1;
+    const blockType = block[0];
+    const BLOCK_SIZE = HASH_BLOCK_SIZES[blockType];
 
     const hash = hashBlock(block.subarray(0, BLOCK_SIZE));
 
-    const isValid = validateBlockSignature(block, hash, BLOCK_TYPE);
+    const isValid = validateBlockSignature(block, hash, blockType);
 
     if (!bypassCheck && !isValid) return 2;
 
     if (txn.getBinary(blockDBI, hash)) return 3;
 
-    switch(BLOCK_TYPE) {
+    switch(blockType) {
         case BLOCK_TYPES.SEND: {
             if (!bypassCheck) {
-                const sourceEntry = txn.getBinary(accountDBI, BLOCK_INFO.SOURCE);
+                const sourceEntry = txn.getBinary(accountDBI, blockInfo.source);
                 if (sourceEntry == null) return 4;
 
-                if (!(sourceEntry.subarray(16, 48).equals(BLOCK_INFO.BLOCK_LINK))) return 5;
+                if (!(sourceEntry.subarray(16, 48).equals(blockInfo.blockLink))) return 5;
 
                 const sourceBalance = readBigUInt128BE(sourceEntry, 0);
 
-                if (sourceBalance < BLOCK_INFO.AMOUNT) return 4;
+                if (sourceBalance < blockInfo.amount) return 4;
 
-                const newBalance = sourceBalance - BLOCK_INFO.AMOUNT;
+                const newBalance = sourceBalance - blockInfo.amount;
 
                 writeBigUInt128BE(sourceEntry, newBalance, 0);
                 sourceEntry.set(hash, 16);
 
-                ledgerEvents.emit("balanceUpdate", {
-                    account: BLOCK_INFO.SOURCE,
+                txn.putBinary(accountDBI, blockInfo.source, sourceEntry);
+
+                ledgerEvents.emit("accountState", {
+                    account: blockInfo.source,
+                    hash,
                     balance: newBalance
                 })
-
-                txn.putBinary(accountDBI, BLOCK_INFO.SOURCE, sourceEntry);
             }
 
             const blockAmount = Buffer.alloc(16);
-            writeBigUInt128BE(blockAmount, BLOCK_INFO.AMOUNT, 0);
+            writeBigUInt128BE(blockAmount, blockInfo.amount, 0);
 
             txn.putBinary(pendingDBI, Buffer.concat([
-                BLOCK_INFO.RECIPIENT,
+                blockInfo.recipient,
                 hash
             ]), blockAmount);
 
             ledgerEvents.emit("pending", {
-                account: BLOCK_INFO.RECIPIENT,
-                block: hash
+                account: blockInfo.recipient,
+                block: hash,
+                amount: blockInfo.amount
             })
 
-            /*const destEntry = txn.getBinary(accountDBI, BLOCK_INFO.RECIPIENT);
-            if (destEntry) {
-                const destBalance = readBigUInt128BE(destEntry, 0);
-                writeBigUInt128BE(destEntry, destBalance + BLOCK_INFO.AMOUNT, 0);
-                txn.putBinary(accountDBI, BLOCK_INFO.RECIPIENT, destEntry);
-            } else {
-                const destinationBuffer = Buffer.alloc(48, 0);
-                writeBigUInt128BE(destinationBuffer,  BLOCK_INFO.AMOUNT, 0);
-
-                txn.putBinary(accountDBI, BLOCK_INFO.RECIPIENT, destinationBuffer);
-            }*/
             break;
         }
         case BLOCK_TYPES.RECEIVE: {
             const pendingKey = Buffer.concat([
-                BLOCK_INFO.RECIPIENT,
-                BLOCK_INFO.SOURCE
+                blockInfo.recipient,
+                blockInfo.source
             ]);
             const pendingBlock = txn.getBinary(pendingDBI, pendingKey);
             if (!pendingBlock) return 6;
             const recieveAmount = readBigUInt128BE(pendingBlock, 0);
             txn.del(pendingDBI, pendingKey);
 
-            const accountInfo = AccountInfo.decode(txn.getBinary(accountDBI, BLOCK_INFO.RECIPIENT));
-            if (!BLOCK_INFO.BLOCK_LINK.equals(accountInfo.head)) return 5;
+            const accountInfo = AccountInfo.decode(txn.getBinary(accountDBI, blockInfo.recipient));
+            if (!blockInfo.blockLink.equals(accountInfo.head)) return 5;
 
             const newBalance = accountInfo.balance + recieveAmount;
 
-            ledgerEvents.emit("balanceUpdate", {
-                account: BLOCK_INFO.RECIPIENT,
-                balance: newBalance
-            })
 
-            txn.putBinary(accountDBI, BLOCK_INFO.RECIPIENT, AccountInfo.encode(
+            txn.putBinary(accountDBI, blockInfo.recipient, AccountInfo.encode(
                 newBalance,
                 hash
             ));
+
+            ledgerEvents.emit("accountState", {
+                account: blockInfo.recipient,
+                hash,
+                balance: newBalance
+            })
 
             break;
         }
@@ -251,41 +249,43 @@ function _insertBlock(txn, block, bypassCheck) {
     return 0;
 }
 
-const INSERT_RESULT_CODES = {
-    0: "Success",
-    1: "Invalid Block Format",
-    2: "Signature is invalid",
-    3: "Block is already published",
-    4: "Source Account doesn't have sufficent balance to furfill transaction.",
-    5: "Invalid Head Block",
-    6: "Source is invaid",
-
-}
 
 function _preProccessBlock(txn, block, bypassCheck) {
-    const BLOCK_INFO = decodeBlock(block);
-    if (BLOCK_INFO == null) return 1;
-    const BLOCK_TYPE = block[0];
-    const BLOCK_SIZE = HASH_BLOCK_SIZES[BLOCK_TYPE];
+    const blockInfo = decodeBlock(block);
+    if (blockInfo == null) return 1;
+    const blockType = block[0];
+    const BLOCK_SIZE = HASH_BLOCK_SIZES[blockType];
 
     const hash = hashBlock(block.subarray(0, BLOCK_SIZE));
 
-    const isValid = validateBlockSignature(block, hash, BLOCK_TYPE);
+    const isValid = validateBlockSignature(block, hash, blockType);
 
     if (!bypassCheck && !isValid) return 2;
 
     if (txn.getBinary(blockDBI, hash)) return 3;
 
-    switch(BLOCK_TYPE) {
+    switch(blockType) {
         case BLOCK_TYPES.SEND: {
             if (!bypassCheck) {
-                const sourceEntry = txn.getBinary(accountDBI, BLOCK_INFO.SOURCE);
+                const sourceEntry = txn.getBinary(accountDBI, blockInfo.source);
                 if (sourceEntry == null) return 6;
-                if (!(sourceEntry.subarray(16, 48).equals(BLOCK_INFO.BLOCK_LINK))) return 5;
+                if (!(sourceEntry.subarray(16, 48).equals(blockInfo.blockLink))) return 5;
                 const sourceBalance = readBigUInt128BE(sourceEntry, 0);
-                if (sourceBalance < BLOCK_INFO.AMOUNT) return 4;
+                if (sourceBalance < blockInfo.amount) return 4;
             }
             break;
+        }
+        case BLOCK_TYPES.RECEIVE: {
+            const pendingBlock = txn.getBinary(pendingDBI, Buffer.concat([
+                blockInfo.recipient,
+                blockInfo.source
+            ]));
+            if (!pendingBlock) return 6;
+
+            const accountInfo = AccountInfo.decode(txn.getBinary(accountDBI, blockInfo.recipient));
+            if (!blockInfo.blockLink.equals(accountInfo.head)) return 5;
+
+            return 0;
         }
         default: {
             return 1;
@@ -316,6 +316,8 @@ function insertBlock({
     
                 if (result == 0) {
                     txn.commit();
+
+                    ledgerEvents.emit("blockInserted", block);
                 } else {
                     txn.abort();
                 }
@@ -393,8 +395,53 @@ function listPending() {
 
 //console.log(listPending())
 
+function getAccount(publicKey, normalize = true) {
+    const txn = env.beginTxn({ readOnly: true });
+    const accountInfo = txn.getBinary(accountDBI, publicKey);
+    txn.abort();
+
+    if (accountInfo == null && !normalize) {
+        return null;
+    } else {
+        return AccountInfo.decode(accountInfo);
+    }
+}
+
+const pendingStartRange = Buffer.alloc(32, 0x00);
+
+function getPending(publicKey, limit = 50) {
+    const startKey = Buffer.concat([
+        publicKey,
+        pendingStartRange
+    ]);
+
+    const txn = env.beginTxn({ readOnly: true });
+    const cursor = new lmdb.Cursor(txn, pendingDBI);
+
+    let list = [];
+
+    var i = 0;
+
+    for (var found = cursor.goToRange(startKey); found !== null; found = cursor.goToNext()) {
+        if (i++ >= limit) break;
+        if (!found.subarray(0, 32).equals(publicKey)) break;
+        const blockHash = found.subarray(32, 64);
+        const amount = readBigUInt128BE(cursor.getCurrentBinary(), 0);
+
+        list.push({
+            hash: blockHash,
+            amount
+        })
+    }
+
+    txn.abort();
+
+    return list;
+}
+
 module.exports = {
-    INSERT_RESULT_CODES,
     insertBlock,
-    ledgerEvents
+    ledgerEvents,
+    getAccount,
+    getPending
 }

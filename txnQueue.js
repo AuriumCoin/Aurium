@@ -12,6 +12,10 @@ class WriteTransaction {
         return this.txn.getBinary(dbi, key);
     }
 
+    del(dbi, key) {
+        return this.txn.del(dbi, key);
+    }
+
     abort() {
         this.txn.abort();
         
